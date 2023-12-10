@@ -18,26 +18,6 @@ from albumentations.pytorch import ToTensorV2
 from models.mvssnet import get_mvss
 from models.upernet import EncoderDecoder
 
-def parse_paths(file_path) :
-
-    if "masks" in file_path : 
-
-        mask_old_str = "[ROOT]/ori/CASIAv2//masks"
-        mask_new_str = "/content/casiav2/CASIA2.0_revised/CASIA2.0_Groundtruth"
-        file_path = file_path.replace(mask_old_str, mask_new_str)
-
-    elif "edges" in file_path : 
-        edges_old_str = "[ROOT]/ori/CASIAv2//edges"
-        edges_new_str = "/content/casiav2/CASIA2.0_revised/CASIA2.0_Groundtruth"
-        file_path = file_path.replace(edges_old_str, edges_new_str)
-
-    else : 
-        old_str = "[ROOT]/ori/CASIAv2//images"
-        new_str = "/content/casiav2/CASIA2.0_revised"
-        file_path = file_path.replace(old_str, new_str)
-
-    return file_path
-
 
 def read_paths(paths_file, subsets):
     data = []
@@ -45,14 +25,13 @@ def read_paths(paths_file, subsets):
     with open(paths_file, 'r') as f:
         lines = f.readlines()
         for l in lines:
-            if "CASIAv2" in l :
-                parts = l.rstrip().split(' ')
-                input_image_path = parse_paths(parts[0])
-                mask_image_path = parse_paths(parts[1])
-                # parts[2] is the path for edges, skipped
-                label = int(parts[3])
+            parts = l.rstrip().split(' ')
+            input_image_path = parts[0]
+            mask_image_path = parts[1]
+            # parts[2] is the path for edges, skipped
+            label = int(parts[3])
 
-                data.append((input_image_path, mask_image_path, label))
+            data.append((input_image_path, mask_image_path, label))
 
     return data
 
