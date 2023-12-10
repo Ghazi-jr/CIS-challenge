@@ -41,6 +41,26 @@ class FakeDataset(Dataset):
 
         return
 
+    def parse_paths(self, file_path) :
+
+        if "masks" in file_path : 
+
+            mask_old_str = "[ROOT]/ori/CASIAv2//masks"
+            mask_new_str = "/content/casiav2/CASIA2.0_revised/CASIA2.0_Groundtruth"
+            file_path = file_path.replace(mask_old_str, mask_new_str)
+
+        elif "edges" in file_path : 
+            edges_old_str = "[ROOT]/ori/CASIAv2//edges"
+            edges_new_str = "/content/casiav2/CASIA2.0_revised/CASIA2.0_Groundtruth"
+            file_path = file_path.replace(edges_old_str, edges_new_str)
+
+        else : 
+            old_str = "[ROOT]/ori/CASIAv2//images"
+            new_str = "/content/casiav2/CASIA2.0_revised"
+            file_path = file_path.replace(old_str, new_str)
+
+        return file_path
+
     def __init__(self, global_rank, paths_file, image_size, id, n_c_samples = None, val = False):
         self.image_size = image_size
 
@@ -52,7 +72,7 @@ class FakeDataset(Dataset):
         self.mask_image_paths = []
         self.edge_image_paths = []
         self.labels = []
-        
+
         self.save_path = 'cond_paths_file_' + str(id) + ('_train' if not val else '_val') + '.txt'
 
         if ('cond' not in paths_file):
@@ -63,9 +83,9 @@ class FakeDataset(Dataset):
                 lines = f.readlines()
                 for l in lines:
                     parts = l.rstrip().split(' ')
-                    input_image_path = parts[0]
-                    mask_image_path = parts[1]
-                    edge_image_path = parts[2]
+                    input_image_path = (self.parse_paths(parts[0]))
+                    mask_image_path = (self.parse_paths(parts[1]))
+                    edge_image_path = (self.parse_paths(parts[2]))
                     label_str = parts[3]
 
                     # add to distribution
@@ -83,7 +103,8 @@ class FakeDataset(Dataset):
             if (global_rank == 0):
                 with open(self.save_path, 'w') as f:
                     for i in range(len(self.input_image_paths)):
-                        f.write(self.input_image_paths[i] + ' ' + self.mask_image_paths[i] + ' ' + self.edge_image_paths[i] + ' ' + str(self.labels[i]) + '\n')
+                        
+                        f.write(self.parse_paths(self.input_image_paths[i]) + ' ' + self.parse_paths(self.mask_image_paths[i]) + ' ' + self.parse_paths(self.edge_image_paths[i]) + ' ' + str(self.labels[i]) + '\n')
 
                 print('Final paths file (%s) for %s saved to %s' % (('train' if not val else 'val'), str(id), self.save_path))
 
@@ -94,9 +115,9 @@ class FakeDataset(Dataset):
                 lines = f.readlines()
                 for l in lines:
                     parts = l.rstrip().split(' ')
-                    self.input_image_paths.append(parts[0])
-                    self.mask_image_paths.append(parts[1])
-                    self.edge_image_paths.append(parts[2])
+                    self.input_image_paths.append(self.parse_paths(parts[0]))
+                    self.mask_image_paths.append(self.parse_paths(parts[1]))
+                    self.edge_image_paths.append(self.parse_paths(parts[2]))
                     self.labels.append(int(parts[3]))
 
         # ----------
