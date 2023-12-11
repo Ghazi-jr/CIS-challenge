@@ -1,6 +1,7 @@
 import os
 import cv2
 import numpy as np
+from skimage import feature
 import sys
 import argparse
 from sklearn.metrics import roc_auc_score, roc_curve, ConfusionMatrixDisplay
@@ -18,25 +19,88 @@ from albumentations.pytorch import ToTensorV2
 from models.mvssnet import get_mvss
 from models.upernet import EncoderDecoder
 
+#Feature Extraction and transformation for each image
+def  transform_and_classify(image_path) : 
 
+    #We will define all the functions for feature extraction
+    def extract_noise_patterns(image):
+        gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        laplacian = cv2.Laplacian(gray_image, cv2.CV_64F)
+        laplacian_var = laplacian.var()
+        return [laplacian_var]
+
+    def extract_compression_artifacts(image):
+        gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        dct_coeffs = cv2.dct(np.float32(gray_image))
+        compression_features = dct_coeffs[8:16, 8:16].flatten()
+        return compression_features.tolist()
+
+    def extract_color_histograms(image):
+        hist_b = cv2.calcHist([image], [0], None, [256], [0, 256])
+        hist_g = cv2.calcHist([image], [1], None, [256], [0, 256])
+        hist_r = cv2.calcHist([image], [2], None, [256], [0, 256])
+
+        color_histogram_features = np.concatenate([hist_b, hist_g, hist_r]).flatten()
+        return color_histogram_features.tolist()
+
+    def extract_splicing_artifacts(image):
+        gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        lbp = feature.local_binary_pattern(gray_image, P=8, R=1, method="uniform")
+        splicing_features = np.histogram(lbp, bins=np.arange(0, 10), density=True)[0]
+        return splicing_features.tolist()
+
+    def extract_blurring_and_sharpness(image):
+        gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        laplacian_var = cv2.Laplacian(gray_image, cv2.CV_64F).var()
+        return [laplacian_var]
+
+
+    img = cv2.imread(image_path)
+
+    noise_features = extract_noise_patterns(img)
+    compression_features = extract_compression_artifacts(img)
+    color_histogram_features = extract_color_histograms(img)
+    splicing_features = extract_splicing_artifacts(img)
+    blurring_sharpness_features = extract_blurring_and_sharpness(img)
+
+    img_features = (
+        noise_features +
+        compression_features +
+        color_histogram_features +
+        splicing_features +
+        blurring_sharpness_features
+    )
+
+    return np.array(img_features).reshape(1, -1)
+
+
+
+#Load classification model
+def load_classification_model(classifier_path) :
+    with open(classifier_path, 'rb') as f:
+        clf = pickle.load(f)
+
+    return clf
+
+#Read Images for evauluation
 def read_paths(paths_file, subsets):
     data = []
-    #Add a ckeck if image exists
 
-    
     with open(paths_file, 'r') as f:
         lines = f.readlines()
         for l in lines:
             parts = l.rstrip().split(' ')
             input_image_path = parts[0]
             mask_image_path = parts[1]
-            # parts[2] is the path for edges, skipped
             label = int(parts[3])
 
-            data.append((input_image_path, mask_image_path, label))
+            #check for the existance of the file before adding them into our dataset
+            if ((os.path.exists(input_image_path) == True) and (os.path.exists(mask_image_path) == True)) :
+                data.append((input_image_path, mask_image_path, label))
 
     return data
 
+#Evaluation Functions
 def calculate_pixel_f1(pd, gt):
     # both the predition and groundtruth are empty
     if np.max(pd) == np.max(gt) and np.max(pd) == 0:
@@ -100,17 +164,21 @@ def save_auc(y_true, scores, save_path):
 
     return fpr, tpr, thresholds[ix], gmeans[ix]
 
+#Parsing args from terminal
 def parse_args():
     parser = argparse.ArgumentParser(description='Evaluation')
     parser.add_argument('--out_dir', type=str, default='out')
     parser.add_argument("--paths_file", type=str, default="/eval_files.txt", help="path to the file with input paths") # each line of this file should contain "/path/to/image.ext /path/to/mask.ext /path/to/edge.ext 1 (for fake)/0 (for real)"; for real image.ext, set /path/to/mask.ext and /path/to/edge.ext as a string None
     parser.add_argument('--threshold', type=float, default=0.5)
     parser.add_argument('--model', default='ours', choices=['mvssnet', 'upernet', 'ours'], help='model selection')
-    parser.add_argument('--load_path', type=str, help='path to the pretrained model', default="ckpt/mvssnet.pth")
+    parser.add_argument('--load_path_sf', type=str, help='path to the sf pretrained model', default="ckpt/mvssnet.pth")
+    parser.add_argument('--load_path_df', type=str, help='path to the df pretrained model', default="ckpt/mvssnet.pth")
+    parser.add_argument('--clf_path', type=str, help='path to the classifier', default="")
     parser.add_argument("--image_size", type=int, default=512, help="size of the images for prediction")
     parser.add_argument("--subsets", nargs='+', type=str, help="evaluation on certain subsets")
     args = parser.parse_args()
     return args
+
 
 if __name__ == '__main__':
     args = parse_args()
@@ -118,37 +186,38 @@ if __name__ == '__main__':
     if (args.subsets is None):
         args.subsets = []
 
-    # load model
+    # load models
+    # We will load the two best performing models which are the ones created by the authers by training on SF data only and DF data only.
+    # We will use then our high performing classification model to assign each image for the approriate segmentation models
+    # We will end up then having better results and more robust approach to generate predictions for SF and DF images and remove bias created by the approach where the authors trained a model on both datasets.
+
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    if (args.model == 'mvssnet'):
-        model = get_mvss(backbone='resnet50',
-                            pretrained_base=True,
-                            nclass=1,
-                            constrain=True,
-                            n_input=3,
-                            ).cuda()
-    elif (args.model == 'upernet'):
-        model = EncoderDecoder(n_classes=1, img_size=args.image_size, bayar=False).cuda()
-    elif (args.model == 'ours'):
-        model = EncoderDecoder(n_classes=1, img_size=args.image_size, bayar=True).cuda()
+    sf_model = EncoderDecoder(n_classes=1, img_size=args.image_size, bayar=True).cuda()
+    df_model = EncoderDecoder(n_classes=1, img_size=args.image_size, bayar=True).cuda()
+
+
+    #Load the two different checkpoints
+    if os.path.exists(args.load_path_sf):
+        checkpoint = torch.load(args.load_path_sf, map_location='cpu')
+        sf_model.load_state_dict(checkpoint, strict=True)
+        print("load %s finish" % (os.path.basename(args.load_path_sf)))
     else:
-        print("Unrecognized model %s" % args.model)
+        print("%s not exist" % args.load_path_sf)
+        sys.exit()
 
-
-
-
-
-    if os.path.exists(args.load_path):
-        checkpoint = torch.load(args.load_path, map_location='cpu')
-        model.load_state_dict(checkpoint, strict=True)
-        print("load %s finish" % (os.path.basename(args.load_path)))
+    if os.path.exists(args.load_path_df):
+        checkpoint = torch.load(args.load_path_df, map_location='cpu')
+        df_model.load_state_dict(checkpoint, strict=True)
+        print("load %s finish" % (os.path.basename(args.load_path_df)))
     else:
-        print("%s not exist" % args.load_path)
+        print("%s not exist" % args.load_path_df)
         sys.exit()
     
     # no training
-    model.eval()
+    sf_model.eval()
+    df_model.eval()
 
     # read paths for data
     if not os.path.exists(args.paths_file):
@@ -202,12 +271,20 @@ if __name__ == '__main__':
             img = transform(image = img)['image'].to(device).unsqueeze(0)
             img = img / 255.0
 
-            # prediction
-            if (args.model == 'mvssnet'):
-                _, seg = model(img)
-            else:
-                score, seg = model(img)
+            #Apply Classification to check wether the image is deepFake or ShallowFake or authentic
+            clf = load_classification_model(args.clf_path)  
+            to_classify = transform_and_classify(img_path)
 
+            clf_prediction = clf.predict(to_classify)[0]
+
+            if clf_prediction == "deepfake" : 
+                score, seg = df_model(img)
+            elif clf_prediction == "shallowfake" : 
+                score, seg = sf_model(img)
+            else : 
+                #In case the image is authentic we will pass it to the deepFake model since he generated the best results overall
+                core, seg = df_model(img)
+                
             # resize to original
             seg = torch.sigmoid(seg).detach().cpu()
             seg = [np.array(transform_pil(seg[i])) for i in range(len(seg))]
