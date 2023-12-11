@@ -233,8 +233,9 @@ if __name__ == '__main__':
             labs[-1].append(lab)
 
             f1 = 0
-            if mask_path != 'None': # fake
-                gt = cv2.imread(mask_path, 0) / 255.0
+            if os.path.exists(mask_path):
+                if mask_path != 'None': # fake
+                    gt = cv2.imread(mask_path, 0) / 255.0
             else:
                 gt = np.zeros((ori_size[0], ori_size[1]))
 
